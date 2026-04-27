@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Screenshots – Today</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 24px 32px 16px;
+      border-bottom: 1px solid #1e1e1e;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    #meta {
+      font-size: 0.8rem;
+      color: #666;
+    }
+
+    #status {
+      padding: 60px 32px;
+      text-align: center;
+      color: #555;
+      font-size: 0.9rem;
+    }
+
+    #grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .card {
+      position: relative;
+      background: #111;
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .card img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .card .timestamp {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 18px 10px 8px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.75));
+      font-size: 0.72rem;
+      color: #ccc;
+      letter-spacing: 0.04em;
+      opacity: 0;
+    }
+
+    .card:hover .timestamp { opacity: 1; }
+
+    /* Lightbox */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.92);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #lightbox.open { display: flex; }
+
+    #lightbox img {
+      max-width: 95vw;
+      max-height: 88vh;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+
+    #lightbox-close {
+      position: absolute;
+      top: 16px;
+      right: 22px;
+      font-size: 1.5rem;
+      color: #888;
+      cursor: pointer;
+      background: none;
+      border: none;
+      line-height: 1;
+    }
+
+    #lightbox-close:hover { color: #fff; }
+
+    #lightbox-label {
+      font-size: 0.75rem;
+      color: #666;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Screenshots</h1>
+  <span id="meta">loading…</span>
+</header>
+
+<div id="status">Fetching today's screenshots…</div>
+<div id="grid"></div>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <button id="lightbox-close" onclick="closeLightbox()">✕</button>
+  <img id="lightbox-img" src="" alt="" />
+  <span id="lightbox-label"></span>
+</div>
+
+<script>
+  const CDN    = "https://d3efr8i3xj2spn.cloudfront.net";
+  const BUCKET = "testingmaddy2";
+  const REGION = "ap-south-1";
+  const POLL_MS = 5000;
+
+  // Today in local time (matches the sender's UTC date when used locally)
+  const today  = new Date().toISOString().slice(0, 10);
+  const PREFIX = `ct/screenshots/${today}/`;
+
+  document.querySelector("header h1").textContent = `Screenshots — ${today}`;
+
+  const seenKeys = new Set();
+
+  async function fetchKeys() {
+    const url = `https://${BUCKET}.s3.${REGION}.amazonaws.com/?list-type=2&prefix=${encodeURIComponent(PREFIX)}&max-keys=1000`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const xml = await res.text();
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    return [...doc.querySelectorAll("Contents Key")]
+      .map(n => n.textContent)
+      .filter(k => /\.(png|jpe?g|webp)$/i.test(k));
+  }
+
+  function formatKey(key) {
+    const name = key.split("/").pop();
+    const raw  = name.replace(/\.\w+$/, "").split("-")[0]; // "153045"
+    return /^\d{6}$/.test(raw)
+      ? `${raw.slice(0,2)}:${raw.slice(2,4)}:${raw.slice(4,6)}`
+      : name;
+  }
+
+  function addCard(key, prepend = false) {
+    const label = formatKey(key);
+    const card  = document.createElement("div");
+    card.className  = "card";
+    card.dataset.key = key;
+
+    const img = document.createElement("img");
+    img.src     = `${CDN}/${key}`;
+    img.alt     = label;
+    img.loading = "lazy";
+
+    const ts = document.createElement("div");
+    ts.className   = "timestamp";
+    ts.textContent = label;
+
+    card.append(img, ts);
+    card.addEventListener("click", () => openLightbox(`${CDN}/${key}`, label));
+
+    const grid = document.getElementById("grid");
+    if (prepend && grid.firstChild) {
+      grid.insertBefore(card, grid.firstChild);
+      // Flash new card
+      card.style.outline = "2px solid #4af";
+      setTimeout(() => card.style.outline = "", 2500);
+    } else {
+      grid.appendChild(card);
+    }
+  }
+
+  async function poll(isFirst = false) {
+    const statusEl = document.getElementById("status");
+    const metaEl   = document.getElementById("meta");
+
+    try {
+      const keys = await fetchKeys();
+
+      // Sort descending (latest first by filename)
+      keys.sort((a, b) => b.localeCompare(a));
+
+      const newKeys = keys.filter(k => !seenKeys.has(k));
+
+      if (isFirst) {
+        if (keys.length === 0) {
+          statusEl.textContent = "No screenshots yet today.";
+        } else {
+          statusEl.style.display = "none";
+          keys.forEach(k => { seenKeys.add(k); addCard(k, false); });
+        }
+      } else {
+        // Prepend genuinely new ones (sorted so latest goes first)
+        newKeys.sort((a, b) => b.localeCompare(a)).forEach(k => {
+          seenKeys.add(k);
+          addCard(k, true);
+          statusEl.style.display = "none";
+        });
+      }
+
+      const total = seenKeys.size;
+      metaEl.textContent = total
+        ? `${total} screenshot${total !== 1 ? "s" : ""} · live`
+        : "watching…";
+
+    } catch (err) {
+      if (isFirst) statusEl.textContent = `Error: ${err.message}`;
+      metaEl.textContent = "retrying…";
+    }
+
+    setTimeout(() => poll(false), POLL_MS);
+  }
+
+  /* ── Lightbox ── */
+  function openLightbox(src, label) {
+    document.getElementById("lightbox-img").src   = src;
+    document.getElementById("lightbox-label").textContent = label;
+    document.getElementById("lightbox").classList.add("open");
+  }
+
+  function closeLightbox() {
+    document.getElementById("lightbox").classList.remove("open");
+    document.getElementById("lightbox-img").src = "";
+  }
+
+  document.getElementById("lightbox").addEventListener("click", e => {
+    if (e.target === e.currentTarget) closeLightbox();
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeLightbox(); });
+
+  poll(true);
+</script>
+</body>
+</html>
