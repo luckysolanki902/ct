@@ -17,10 +17,10 @@ log = setup_logger("sender")
 # Wider than 3px because the macOS Dock + hot-corner gestures often keep
 # the cursor a few px away from the true edge.
 CORNER_THRESHOLD_PX = 25
-# Dwell time required before triggering a capture
-DWELL_SECONDS = 2.0
+# Cooldown after a capture: ignore further triggers for this many seconds.
+COOLDOWN_SECONDS = 2.0
 # Polling interval
-POLL_INTERVAL = 0.1
+POLL_INTERVAL = 0.05
 
 
 def _get_screen_size():
@@ -66,8 +66,8 @@ def run():
         log.error("Failed to read screen size: %s", e)
         return
 
-    log.info("Sender started. Screen=%dx%d. Move cursor to bottom-LEFT and hold for %.1fs to capture. Ctrl+C to stop.",
-             screen_w, screen_h, DWELL_SECONDS)
+    log.info("Sender started. Screen=%dx%d. Touch bottom-LEFT corner to capture (then %.1fs cooldown). Ctrl+C to stop.",
+             screen_w, screen_h, COOLDOWN_SECONDS)
 
     s3 = None
     try:
@@ -75,8 +75,7 @@ def run():
     except Exception as e:
         log.error("Failed to init S3 client (will retry on demand): %s", e)
 
-    in_corner_since = None
-    armed = True  # must leave the corner before triggering again
+    cooldown_until = 0.0  # monotonic timestamp
 
     while True:
         try:
@@ -90,20 +89,11 @@ def run():
             in_corner = (x <= CORNER_THRESHOLD_PX) and \
                         (y >= screen_h - 1 - CORNER_THRESHOLD_PX)
 
-            if in_corner:
-                if in_corner_since is None:
-                    in_corner_since = time.monotonic()
-                    log.info("Cursor in bottom-left corner at (%d,%d). Hold %.1fs...",
-                             x, y, DWELL_SECONDS)
-                elapsed = time.monotonic() - in_corner_since
-                if armed and elapsed >= DWELL_SECONDS:
-                    armed = False  # disarm until cursor leaves corner
-                    _trigger(s3)
-            else:
-                if in_corner_since is not None and not armed:
-                    log.info("Re-armed (cursor left corner).")
-                in_corner_since = None
-                armed = True
+            now = time.monotonic()
+            if in_corner and now >= cooldown_until:
+                log.info("Trigger at (%d,%d). Capturing...", x, y)
+                cooldown_until = now + COOLDOWN_SECONDS
+                _trigger(s3)
 
             time.sleep(POLL_INTERVAL)
 

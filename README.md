@@ -1,7 +1,7 @@
 # ct — stealth screenshot sender / receiver
 
 Two-mode terminal app:
-- **Sender (1)**: silently watches the cursor. When it sits in the **bottom-left corner for 2 seconds**, it grabs a screenshot (no shutter / flash / UI), uploads it to S3, deletes the temp file, then keeps watching. Any error is logged — never crashes. Stop with `Ctrl+C`.
+- **Sender (1)**: silently watches the cursor. The instant it touches the **bottom-left corner**, it grabs a screenshot (no shutter / flash / UI), uploads it to S3, deletes the temp file, then ignores the corner for a **2-second cooldown** before it can fire again. Any error is logged — never crashes. Stop with `Ctrl+C`.
 - **Receiver (2)**: polls S3 for new files, downloads each new one through the configured CloudFront CDN into `downloads/<Today's Readable Date>/<readable time>.png`. Stop with `Ctrl+C`.
 
 ## Setup (macOS)
