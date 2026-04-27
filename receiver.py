@@ -15,7 +15,9 @@ from common import (
 log = setup_logger("receiver")
 
 POLL_INTERVAL = 5.0           # seconds between S3 list checks
-DOWNLOAD_TIMEOUT = 30          # seconds
+CDN_CONNECT_TIMEOUT = 4        # seconds to establish CDN connection
+CDN_READ_TIMEOUT = 8           # seconds to read CDN response
+S3_DOWNLOAD_TIMEOUT = 30       # seconds for direct S3 download
 DOWNLOAD_ROOT = "downloads"
 
 
@@ -67,16 +69,17 @@ def _download_via_cdn(key: str, dest_path: str) -> bool:
         return False
     try:
         log.info("CDN GET %s", url)
-        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
-            if r.status_code != 200:
-                log.warning("CDN returned HTTP %d for %s", r.status_code, key)
-                return False
-            tmp = dest_path + ".part"
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            os.replace(tmp, dest_path)
+        # Non-streaming: small PNGs, and the (connect, read) timeout actually
+        # bounds the whole transfer this way. Streaming would let body bytes
+        # hang indefinitely after headers arrive.
+        r = requests.get(url, timeout=(CDN_CONNECT_TIMEOUT, CDN_READ_TIMEOUT))
+        if r.status_code != 200:
+            log.warning("CDN returned HTTP %d for %s", r.status_code, key)
+            return False
+        tmp = dest_path + ".part"
+        with open(tmp, "wb") as f:
+            f.write(r.content)
+        os.replace(tmp, dest_path)
         return True
     except Exception as e:
         log.warning("CDN download failed for %s: %s", key, e)
