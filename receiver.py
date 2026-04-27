@@ -61,14 +61,16 @@ def _cdn_url(key: str) -> str:
     return f"{CDN_BASE_URL}/{quote(key)}"
 
 
-def _download(key: str, dest_path: str) -> bool:
+def _download_via_cdn(key: str, dest_path: str) -> bool:
     url = _cdn_url(key)
     if not url:
-        log.error("No CDN_BASE_URL configured.")
         return False
     try:
+        log.info("CDN GET %s", url)
         with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
-            r.raise_for_status()
+            if r.status_code != 200:
+                log.warning("CDN returned HTTP %d for %s", r.status_code, key)
+                return False
             tmp = dest_path + ".part"
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(chunk_size=64 * 1024):
@@ -77,13 +79,39 @@ def _download(key: str, dest_path: str) -> bool:
             os.replace(tmp, dest_path)
         return True
     except Exception as e:
-        log.error("Download failed for %s: %s", key, e)
+        log.warning("CDN download failed for %s: %s", key, e)
         try:
             if os.path.exists(dest_path + ".part"):
                 os.remove(dest_path + ".part")
         except Exception:
             pass
         return False
+
+
+def _download_via_s3(s3, key: str, dest_path: str) -> bool:
+    try:
+        log.info("S3 GET s3://%s/%s", AWS_S3_BUCKET_NAME, key)
+        tmp = dest_path + ".part"
+        s3.download_file(AWS_S3_BUCKET_NAME, key, tmp)
+        os.replace(tmp, dest_path)
+        return True
+    except Exception as e:
+        log.error("S3 download failed for %s: %s", key, e)
+        try:
+            if os.path.exists(dest_path + ".part"):
+                os.remove(dest_path + ".part")
+        except Exception:
+            pass
+        return False
+
+
+def _download(s3, key: str, dest_path: str) -> bool:
+    # Try CDN first; fall back to direct S3 if CDN fails (e.g. distribution
+    # not configured for this prefix, cache miss + permission, etc).
+    if _download_via_cdn(key, dest_path):
+        return True
+    log.info("Falling back to direct S3 for %s", key)
+    return _download_via_s3(s3, key, dest_path)
 
 
 def _unique_path(folder: str, base: str, ext: str) -> str:
@@ -133,9 +161,12 @@ def run():
                 base = _readable_time(ts_local)
                 ext = os.path.splitext(key)[1] or ".png"
                 dest = _unique_path(folder, base, ext)
-                if _download(key, dest):
+                log.info("Downloading %s -> %s", key, dest)
+                if _download(s3, key, dest):
                     log.info("Saved %s", dest)
                     seen.add(key)
+                else:
+                    log.error("All download methods failed for %s (will retry)", key)
                 # if download failed, leave it un-seen so we retry next cycle
             time.sleep(POLL_INTERVAL)
         except KeyboardInterrupt:
