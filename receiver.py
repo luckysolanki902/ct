@@ -19,9 +19,9 @@ DOWNLOAD_TIMEOUT = 30          # seconds
 DOWNLOAD_ROOT = "downloads"
 
 
-def _today_folder() -> str:
+def _folder_for(dt: datetime) -> str:
     # e.g. "April 27, 2026"
-    folder_name = datetime.now().strftime("%B %d, %Y").replace(" 0", " ")
+    folder_name = dt.strftime("%B %d, %Y").replace(" 0", " ")
     path = os.path.join(DOWNLOAD_ROOT, folder_name)
     os.makedirs(path, exist_ok=True)
     return path
@@ -101,19 +101,16 @@ def run():
     seen = set()
     s3 = None
 
-    # Initial pass: mark existing keys as seen so we only fetch NEW ones.
+    # Wait until S3 client is ready, but DO NOT baseline existing objects:
+    # we want to download everything that's already there too.
     while s3 is None:
         try:
             s3 = get_s3_client()
-            existing = _list_keys(s3)
-            for k, _ in existing:
-                seen.add(k)
-            log.info("Baseline: %d existing object(s) marked as seen.", len(seen))
         except KeyboardInterrupt:
             log.info("Stopping receiver (Ctrl+C).")
             return
         except Exception as e:
-            log.error("Baseline failed, retrying: %s", e)
+            log.error("S3 client init failed, retrying: %s", e)
             s3 = None
             time.sleep(POLL_INTERVAL)
 
@@ -126,13 +123,13 @@ def run():
             if new_items:
                 log.info("Found %d new file(s).", len(new_items))
             for key, last_modified in new_items:
-                folder = _today_folder()
                 ts = last_modified if isinstance(last_modified, datetime) else datetime.now()
-                # Convert to local time for readable filename
+                # Convert to local time for folder + filename
                 try:
                     ts_local = ts.astimezone()
                 except Exception:
                     ts_local = ts
+                folder = _folder_for(ts_local)
                 base = _readable_time(ts_local)
                 ext = os.path.splitext(key)[1] or ".png"
                 dest = _unique_path(folder, base, ext)

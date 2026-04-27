@@ -12,7 +12,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME")
 CDN_BASE_URL = os.getenv("CDN_BASE_URL", "").rstrip("/")
-S3_PREFIX = os.getenv("S3_PREFIX", "screenshots/")
+S3_PREFIX = os.getenv("S3_PREFIX", "ct/screenshots/")
 if not S3_PREFIX.endswith("/"):
     S3_PREFIX += "/"
 
