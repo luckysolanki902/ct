@@ -126,14 +126,14 @@ def _unique_path(folder: str, base: str, ext: str) -> str:
     return candidate
 
 
-def run():
-    log.info("Receiver started. Polling s3://%s/%s every %.1fs. Ctrl+C to stop.",
-             AWS_S3_BUCKET_NAME, S3_PREFIX, POLL_INTERVAL)
+def run(live_only: bool = False):
+    mode = "LIVE only (skipping existing)" if live_only else "ALL files (including backlog)"
+    log.info("Receiver started [%s]. Polling s3://%s/%s every %.1fs. Ctrl+C to stop.",
+             mode, AWS_S3_BUCKET_NAME, S3_PREFIX, POLL_INTERVAL)
     seen = set()
     s3 = None
 
-    # Wait until S3 client is ready, but DO NOT baseline existing objects:
-    # we want to download everything that's already there too.
+    # Wait until S3 client is ready.
     while s3 is None:
         try:
             s3 = get_s3_client()
@@ -144,6 +144,15 @@ def run():
             log.error("S3 client init failed, retrying: %s", e)
             s3 = None
             time.sleep(POLL_INTERVAL)
+
+    # In live-only mode, baseline existing objects so we ignore the backlog.
+    if live_only:
+        try:
+            for k, _ in _list_keys(s3):
+                seen.add(k)
+            log.info("Baseline: ignoring %d existing object(s); waiting for new uploads.", len(seen))
+        except Exception as e:
+            log.error("Baseline failed (will treat all as new): %s", e)
 
     while True:
         try:

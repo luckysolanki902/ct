@@ -22,7 +22,8 @@ pip install -r requirements.txt
 ```bash
 python main.py        # prompts for 1 / 2 / 3
 python main.py 1      # sender
-python main.py 2      # receiver
+python main.py 2      # receiver (asks: live-only?)
+python main.py 2 --live   # receiver, skip existing backlog, only new uploads
 python main.py 3      # clean S3 (under ct/ prefix only)
 ```
 
