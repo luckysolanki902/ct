@@ -1,14 +1,16 @@
-"""Sender: watch cursor, capture stealth screenshot when it dwells in bottom-right corner, upload to S3."""
+"""Sender: watch cursor, capture stealth screenshot on bottom-left trigger, upload to S3."""
 import os
 import time
 import uuid
 import tempfile
 import traceback
 from datetime import datetime, timezone
+from botocore.exceptions import ClientError
 
 from common import (
     setup_logger, get_s3_client,
     AWS_S3_BUCKET_NAME, S3_PREFIX,
+    SYNC_OBJECT_KEY, SYNC_POLL_SECONDS,
 )
 
 log = setup_logger("sender")
@@ -59,6 +61,32 @@ def _upload(s3, local_path: str) -> str:
     return key
 
 
+def _sync_local_file_from_s3(s3, last_etag: str | None) -> str | None:
+    """If sync object changed, overwrite local sync.txt and return the latest etag."""
+    try:
+        head = s3.head_object(Bucket=AWS_S3_BUCKET_NAME, Key=SYNC_OBJECT_KEY)
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return last_etag
+        raise
+
+    etag = (head.get("ETag") or "").strip('"')
+    if etag and etag == last_etag:
+        return last_etag
+
+    resp = s3.get_object(Bucket=AWS_S3_BUCKET_NAME, Key=SYNC_OBJECT_KEY)
+    body = resp["Body"].read()
+
+    local_path = os.path.join(os.path.dirname(__file__), "sync.txt")
+    tmp_path = f"{local_path}.tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(body)
+    os.replace(tmp_path, local_path)
+    log.info("sync.txt updated from s3://%s/%s (%d bytes).", AWS_S3_BUCKET_NAME, SYNC_OBJECT_KEY, len(body))
+    return etag or last_etag
+
+
 def run():
     try:
         screen_w, screen_h = _get_screen_size()
@@ -66,8 +94,12 @@ def run():
         log.error("Failed to read screen size: %s", e)
         return
 
-    log.info("Sender started. Screen=%dx%d. Touch bottom-LEFT corner to capture (then %.1fs cooldown). Ctrl+C to stop.",
-             screen_w, screen_h, COOLDOWN_SECONDS)
+    log.info(
+        "Sender started. Screen=%dx%d. Touch bottom-LEFT corner to capture (then %.1fs cooldown). Ctrl+C to stop.",
+        screen_w,
+        screen_h,
+        COOLDOWN_SECONDS,
+    )
 
     s3 = None
     try:
@@ -76,6 +108,8 @@ def run():
         log.error("Failed to init S3 client (will retry on demand): %s", e)
 
     cooldown_until = 0.0  # monotonic timestamp
+    next_sync_check = 0.0
+    last_sync_etag = None
 
     while True:
         try:
@@ -94,6 +128,16 @@ def run():
                 log.info("Trigger at (%d,%d). Capturing...", x, y)
                 cooldown_until = now + COOLDOWN_SECONDS
                 _trigger(s3)
+
+            if now >= next_sync_check:
+                next_sync_check = now + max(SYNC_POLL_SECONDS, POLL_INTERVAL)
+                try:
+                    client = s3 if s3 is not None else get_s3_client()
+                    if s3 is None:
+                        s3 = client
+                    last_sync_etag = _sync_local_file_from_s3(client, last_sync_etag)
+                except Exception as e:
+                    log.warning("sync poll failed: %s", e)
 
             time.sleep(POLL_INTERVAL)
 

@@ -16,6 +16,9 @@ S3_PREFIX = os.getenv("S3_PREFIX", "ct/screenshots/")
 if not S3_PREFIX.endswith("/"):
     S3_PREFIX += "/"
 
+SYNC_OBJECT_KEY = "ct/sync/sync.txt"
+SYNC_POLL_SECONDS = 1.0
+
 
 def setup_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
